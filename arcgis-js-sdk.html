@@ -1,0 +1,309 @@
+<html>
+
+</html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Same web mapping application, Difference libraries: ArcGIS Maps SDK for JavaScript</title>
+    <script type="module" src="https://js.arcgis.com/calcite-components/3.2.1/calcite.esm.js"></script>
+    <link rel="stylesheet" href="https://js.arcgis.com/4.33/esri/themes/light/main.css" />
+    <script src="https://js.arcgis.com/4.33/"></script>
+    <script type="module" src="https://js.arcgis.com/4.33/map-components/"></script>
+
+    <style>
+        html,
+        body,
+        arcgis-map {
+            padding: 0;
+            margin: 0;
+            height: 100%;
+            width: 100%;
+        }
+
+        #map {
+            position: absolute;
+            left: 0;
+            right: 380px;
+            top: 0;
+            bottom: 0;
+            height: 100%;
+        }
+
+        #panel {
+            position: absolute;
+            right: 0;
+            height: 100%;
+            width: 380px;
+        }
+
+        #title {
+            padding: 20px;
+            font-size: 18px;
+            line-height: 1.4
+        }
+
+        #num-park {
+            color: #228C22;
+            font-size: 36pt;
+            font-weight: bolder;
+            line-height: 0.8;
+        }
+
+        .age {
+            color: #149dcf;
+            font-size: 20pt;
+            font-weight: bolder;
+        }
+    </style>
+
+</head>
+
+<body>
+    <div id="map">
+        <arcgis-map zoom="13" center="114.17, 22.3" basemap="gray-vector">
+            <arcgis-legend position="bottom-left"></arcgis-legend>
+        </arcgis-map>
+    </div>
+    <div id="panel">
+        <div id='title' class='esri-widget'>
+            Please click anywhere on the map to see the park and population summary within a 10-min walking distance.
+        </div>
+    </div>
+
+    <script type="module">
+        const [
+            Graphic,
+            FeatureLayer, GeoJSONLayer,
+            esriConfig, serviceArea, ServiceAreaParams, FeatureSet,
+            GraphicsLayer,
+            networkService,
+            promiseUtils
+        ] = await $arcgis.import([
+            "@arcgis/core/Graphic.js",
+            "@arcgis/core/layers/FeatureLayer.js",
+            "@arcgis/core/layers/GeoJSONLayer.js",
+            "@arcgis/core/config.js",
+            "@arcgis/core/rest/serviceArea.js",
+            "@arcgis/core/rest/support/ServiceAreaParameters.js",
+            "@arcgis/core/rest/support/FeatureSet.js",
+            "@arcgis/core/layers/GraphicsLayer.js",
+            "@arcgis/core/rest/networkService.js",
+            "@arcgis/core/core/promiseUtils.js"
+        ]);
+        const serviceAreaUrl = "https://route-api.arcgis.com/arcgis/rest/services/World/ServiceAreas/NAServer/ServiceArea_World";
+        esriConfig.apiKey = "YOUR_API_KEY";
+        const map = document.querySelector("arcgis-map");
+
+        // store the stats for park and census layer
+        let stat = {
+            num_park: 0, totalPopulation: 0, pctYoung: 0, pctElderly: 0
+        }
+
+        // define symbols
+        const featureLayerSymbol = {
+            type: "simple-fill",
+            color: "rgba(157,179,226,0.85)",
+            outline: {
+                color: "black",
+                width: 0.5
+            }
+        }
+        const featureLayerSelectedSymbol = {
+            type: "simple-fill",
+            color: [255, 255, 255, 0.25],
+            outline: {
+                color: "black",
+                width: 0.5
+            }
+        };
+        const serviceAreaSymbol = {
+            type: "simple-fill",
+            color: [0, 180, 216, 0.5],
+            outline: {
+                color: "white",
+                width: 0.5
+            }
+        };
+        const clickMarkerSymbol = {
+            type: "web-style",
+            name: "esri-pin-2",
+            styleName: "Esri2DPointSymbolsStyle"
+        };
+        const pointLayerSymbol = {
+            type: "simple-marker",
+            color: "white",
+            size: 8
+        };
+        const pointLayerSelectedSymbol = {
+            type: "simple-marker",
+            color: "green",
+            size: 8,
+            outline: {
+                color: "white"
+            }
+        };
+
+        const featureLayer = new FeatureLayer({
+            url: "https://services.arcgis.com/V6ZHFr6zdgNZuVG0/arcgis/rest/services/Hong_Kong_Population_Distribution_by_Age_by_Small_Tertiary_Planning_Unit_Group_in_2016/FeatureServer/0",
+            opacity: 0.5,
+            renderer: {
+                type: "simple",
+                symbol: featureLayerSymbol
+
+            },
+            outFields: ["*"]
+        });
+
+        const geojsonLayer = new GeoJSONLayer({
+            // downloaded from https://portal.csdi.gov.hk/geoportal/?lang=en&datasetId=lcsd_rcd_1629267205215_44172
+            url: "../dataset/HKGS_Dataset_Recreation-Grounds_2022-11-07-1410-10_fullset.geojson",
+            renderer: {
+                type: "simple",
+                symbol: pointLayerSymbol
+            },
+            outFields: ["*"],
+            popupTemplate: {
+                title: "{Facility Name}"
+            },
+            title: "Recreation Grounds in Hong Kong"
+        });
+
+        map.addEventListener("arcgisViewReadyChange", (event) => {
+            map.addLayers([featureLayer, geojsonLayer]);
+        });
+
+        map.addEventListener("arcgisViewClick", (event) => {
+            const locationGraphic = updateLocationGraphic(event.detail.mapPoint);
+            const walkTimeCutoffs = [10]; // minutes
+            findServiceArea(locationGraphic, walkTimeCutoffs, serviceAreaUrl);
+        });
+
+        // create the location graphic - white point
+        const updateLocationGraphic = (point) => {
+            map.graphics.removeAll();
+            const graphic = new Graphic({
+                geometry: point,
+                symbol: clickMarkerSymbol
+            });
+            map.graphics.add(graphic);
+            return graphic
+        }
+
+        const findServiceArea = promiseUtils.debounce(async (location, cutoff, url) => {
+            // get the walking distance
+            const networkDescription = await networkService.fetchServiceDescription(url);
+            const travelMode = networkDescription.supportedTravelModes.find(
+                (travelMode) => travelMode.name === "Walking Time"
+            );
+
+            // set all of the input parameters for the service
+            const taskParameters = new ServiceAreaParams({
+                facilities: new FeatureSet({
+                    features: [location]
+                }),
+                defaultBreaks: cutoff,
+                trimOuterPolygon: true,
+                travelMode
+            });
+
+            const { serviceAreaPolygons } = await serviceArea.solve(url, taskParameters);
+            queryServiceArea(serviceAreaPolygons);
+        })
+
+        const queryServiceArea = (async (polygons) => {
+            // show the service area
+            const graphics = polygons.features.map((feature) => {
+                feature.symbol = serviceAreaSymbol;
+                // add the polygon graphics below the point graphic
+                map.graphics.unshift(feature);
+
+                Promise.all([
+                    queryFeatureLayer(feature), queryGeoJsonLayer(feature)
+                ]).then((results) => {
+
+                    // demographic information from the feature layer
+                    const totalPopulation = getArraySum(Object.values(results[0]))
+                    stat.totalPopulation = totalPopulation;
+                    stat.pctYoung = results[0].F15 / totalPopulation;
+                    stat.pctElderly = results[0].F65 / totalPopulation;
+
+                    // number of parks from the geojson layer query result
+                    stat.num_park = results[1];
+                    updateStat();
+                })
+            })
+        })
+
+        const queryFeatureLayer = (buffer) => {
+            const query = {
+                geometry: buffer.geometry,
+                outFields: ["*"],
+                returnGeometry: true
+            }
+
+            return map.whenLayerView(featureLayer).then(featureLayerView => {
+                return featureLayerView.queryFeatures(query).then(results => {
+                    let ageSum = {
+                        F15: 0, F15_24: 0, F25_44: 0, F45_64: 0, F65: 0
+                    }
+
+                    // visualize the intersected tracts and calcuate statistics
+                    results.features.forEach((feature) => {
+                        feature.symbol = featureLayerSelectedSymbol
+                        ageSum.F15 += feature.attributes.F__15;
+                        ageSum.F15_24 += feature.attributes.F15___24;
+                        ageSum.F25_44 += feature.attributes.F25___44;
+                        ageSum.F45_64 += feature.attributes.F45___64;
+                        ageSum.F65 += feature.attributes.F65_;
+                    })
+
+                    map.graphics.addMany(results.features, -1);
+                    return ageSum;
+                })
+            })
+        }
+
+        const queryGeoJsonLayer = (buffer) => {
+            const query = {
+                geometry: buffer.geometry,
+                spatialRelationship: "intersects",
+                returnGeometry: true
+            }
+
+            return geojsonLayer.queryFeatures(query).then(results => {
+                results.features.forEach((f) => {
+                    f.symbol = pointLayerSelectedSymbol
+                })
+                map.graphics.addMany(results.features, 1)
+                return results.features.length;
+            })
+        }
+
+        const updateStat = () => {
+            document.getElementById("title").innerHTML = [
+                "There are <span id='num-park'>0</span> parks within the 10-min walking distance from the selected location.",
+                "In these census tracts, the total population is <span id='total-population' class='age'>0</span>.",
+                "Children under 15 make up <span id='pct-kids' class='age'>0</span> of the population, ",
+                "and <span id='pct-elderlies' class='age'>0</span> of the population is 65+ year old elderlies"
+            ].join(" ");
+            document.getElementById("num-park").innerHTML = stat.num_park;
+            document.getElementById("total-population").innerHTML = Intl.NumberFormat().format(stat.totalPopulation);
+            document.getElementById("pct-kids").innerHTML = Intl.NumberFormat("en-US", {
+                style: 'percent',
+                maximumFractionDigits: 1
+            }).format(stat.pctYoung);
+            document.getElementById("pct-elderlies").innerHTML = Intl.NumberFormat("en-US", {
+                style: 'percent',
+                maximumFractionDigits: 1
+            }).format(stat.pctElderly);
+        }
+
+        const getArraySum = (array) => {
+            return array.reduce((pv, cv) => pv + cv, 0);
+        };
+    </script>
+
+</body>
+
+</html>
