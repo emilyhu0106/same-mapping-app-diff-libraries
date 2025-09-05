@@ -302,6 +302,20 @@
         const getArraySum = (array) => {
             return array.reduce((pv, cv) => pv + cv, 0);
         };
+
+        // Simplify popup
+        let popup = map.popup;
+        popup = {
+            dockOptions: {
+                buttonEnabled: false,
+            },
+            visibleElements: {
+                closeButton: false,
+                collapseButton: false,
+                actionBar: false,
+            },
+        };
+        map.popup = popup
     </script>
 
 </body>
