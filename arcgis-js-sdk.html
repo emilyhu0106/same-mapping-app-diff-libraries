@@ -190,12 +190,16 @@
             return graphic
         }
 
-        const findServiceArea = promiseUtils.debounce(async (location, cutoff, url) => {
-            // get the walking distance
-            const networkDescription = await networkService.fetchServiceDescription(url);
-            const travelMode = networkDescription.supportedTravelModes.find(
+        // get the definition for walking distance
+        const travelModePromise = networkService.fetchServiceDescription(serviceAreaUrl).then((networkDescription) => {
+            return networkDescription.supportedTravelModes.find(
                 (travelMode) => travelMode.name === "Walking Time"
             );
+        })
+
+        const findServiceArea = promiseUtils.debounce(async (location, cutoff, url) => {
+            // use walking instead of default driving
+            const travelMode = await travelModePromise;
 
             // set all of the input parameters for the service
             const taskParameters = new ServiceAreaParams({
